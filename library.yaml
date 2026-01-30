@@ -1,0 +1,114 @@
+# StudyRAG Library Configuration
+# This file documents the library structure
+
+library_info:
+  name: "Study Materials Library"
+  version: "1.0"
+  last_updated: "2026-01-29"
+
+structure:
+  # Directory structure: raw_data/semester/subject/book/*.pdf
+  description: |
+    Organize your textbooks in the following structure:
+    
+    raw_data/
+      Y3S2/                    # Semester folder (e.g., Y3S2, Y4S1)
+        Stats/                 # Subject folder
+          ISLR2/              # Book folder
+            islr2.pdf         # PDF file(s)
+          ESL/
+            esl.pdf
+        OS/
+          OSTEP/
+            ostep.pdf
+  
+  levels:
+    - level: 1
+      name: "semester"
+      description: "Academic semester (e.g., Y3S2, Y4S1)"
+    
+    - level: 2
+      name: "subject"
+      description: "Subject or course name (e.g., Stats, OS, Marketing)"
+    
+    - level: 3
+      name: "book"
+      description: "Book identifier (e.g., ISLR2, OSTEP)"
+    
+    - level: 4
+      name: "files"
+      description: "PDF files (one or more per book)"
+
+storage:
+  vectorstore:
+    path: "./vectorstore"
+    type: "Chroma"
+    collection: "study_materials"
+    description: "All textbooks stored in single collection with metadata filters"
+  
+  cache:
+    path: "./cache"
+    description: "Parsed text, chunk data, and ingestion logs"
+
+metadata_schema:
+  semester: "string - e.g., 'Y3S2'"
+  subject: "string - e.g., 'Stats'"
+  book_id: "string - e.g., 'ISLR2'"
+  book_title: "string - e.g., 'An Introduction to Statistical Learning'"
+  source_path: "string - relative path from raw_data"
+  page: "integer - page number in PDF"
+
+usage:
+  ingestion:
+    description: "Automatically scans raw_data/ and ingests all PDFs"
+    notes:
+      - "No manual specification needed"
+      - "Skips already-ingested books by default"
+      - "Use force re-ingest to update existing books"
+  
+  navigation:
+    commands:
+      - "semesters - list all semesters"
+      - "subjects - list subjects in active semester"
+      - "books - list books in active scope"
+      - "use <semester> - set active semester"
+      - "open <subject> - set active subject"
+      - "select <book> - add book to active scope"
+      - "clear - clear all scope filters"
+      - "ask <question> - ask a question"
+      - "chat - enter interactive chat mode"
+  
+  scope:
+    description: "Filter searches by semester, subject, and/or books"
+    default: "All materials (no filters)"
+    examples:
+      - "use Y3S2 + open Stats → searches only Y3S2 Stats materials"
+      - "use Y3S2 + open Stats + select ISLR2 → searches only ISLR2 book"
+      - "clear → searches all materials"
+
+examples:
+  example_1:
+    name: "Add textbooks for a new semester"
+    steps:
+      - "Create folder: raw_data/Y3S2/Stats/ISLR2/"
+      - "Copy islr2.pdf into that folder"
+      - "Run: Ingestion Mode → Ingest new books only"
+      - "System automatically detects and embeds the book"
+  
+  example_2:
+    name: "Study a specific subject"
+    steps:
+      - "Run: Study Mode"
+      - "Command: use Y3S2"
+      - "Command: open Stats"
+      - "Command: books (to see available books)"
+      - "Command: chat (to enter chat mode)"
+      - "Ask questions - searches only Y3S2 Stats materials"
+  
+  example_3:
+    name: "Search across all materials"
+    steps:
+      - "Run: Study Mode"
+      - "Command: clear (ensure no active scope)"
+      - "Command: chat"
+      - "Ask questions - searches all materials in library"
