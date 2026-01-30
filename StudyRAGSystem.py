@@ -216,6 +216,16 @@ class IngestionPipeline:
         processed_count = 0
         skipped_count = 0
         
+        # Calculate total books to process
+        books_to_process = []
+        for semester, books in library.items():
+            for book in books:
+                if force_reingest or book['source_path'] not in existing_books:
+                    books_to_process.append((semester, book))
+        
+        total_to_process = len(books_to_process)
+        current_book_num = 0
+        
         for semester, books in library.items():
             for book in books:
                 source_path = book['source_path']
@@ -226,7 +236,10 @@ class IngestionPipeline:
                     skipped_count += 1
                     continue
                 
-                print(f"\n📖 Processing: {book['book_title']}")
+                current_book_num += 1
+                progress_pct = int((current_book_num / total_to_process) * 100) if total_to_process > 0 else 0
+                
+                print(f"\n📖 Processing [{current_book_num}/{total_to_process}] ({progress_pct}%): {book['book_title']}")
                 print(f"   Path: {source_path}")
                 
                 chunks = self.ingest_pdf(book)
@@ -236,7 +249,7 @@ class IngestionPipeline:
                     processed_count += 1
                     print(f"   ✅ Created {len(chunks)} chunks")
                 else:
-                    print(f"   ⚠️  No chunks created")
+                    print("   ⚠️  No chunks created")
         
         # Add all chunks to vectorstore
         if all_chunks:
@@ -256,7 +269,7 @@ class IngestionPipeline:
         print("\n" + "="*70)
         print("✅ INGESTION COMPLETE")
         print("="*70)
-        print(f"📊 Summary:")
+        print("📊 Summary:")
         print(f"   - Books processed: {processed_count}")
         print(f"   - Books skipped: {skipped_count}")
         print(f"   - Total chunks: {len(all_chunks)}")
@@ -317,7 +330,8 @@ class Catalog:
         metadata = self._get_all_metadata()
         
         if semester:
-            metadata = [m for m in metadata if m.get('semester') == semester]
+            # Case-insensitive comparison - compare both in lowercase
+            metadata = [m for m in metadata if m.get('semester', '').lower() == semester.lower()]
         
         subjects = sorted(set(m.get('subject', '') for m in metadata if m.get('subject')))
         return subjects
@@ -327,10 +341,12 @@ class Catalog:
         metadata = self._get_all_metadata()
         
         if semester:
-            metadata = [m for m in metadata if m.get('semester') == semester]
+            # Case-insensitive comparison
+            metadata = [m for m in metadata if m.get('semester', '').lower() == semester.lower()]
         
         if subject:
-            metadata = [m for m in metadata if m.get('subject') == subject]
+            # Case-insensitive comparison
+            metadata = [m for m in metadata if m.get('subject', '').lower() == subject.lower()]
         
         # Get unique books
         books_dict = {}
@@ -384,42 +400,76 @@ def create_retriever_tool(vectorstore, state_getter):
         # Get current state
         state = state_getter()
         
-        # Build metadata filter
-        filter_conditions = {}
+        # Build metadata filter with proper ChromaDB format
+        filter_conditions = []
         
         if state.get('active_semester'):
-            filter_conditions['semester'] = state['active_semester']
+            # Case-insensitive: get actual value from vectorstore
+            filter_conditions.append({'semester': state['active_semester']})
         
         if state.get('active_subject'):
-            filter_conditions['subject'] = state['active_subject']
+            # Case-insensitive: get actual value from vectorstore
+            filter_conditions.append({'subject': state['active_subject']})
         
         if state.get('active_books') and len(state['active_books']) > 0:
-            filter_conditions['book_id'] = {'$in': state['active_books']}
+            filter_conditions.append({'book_id': {'$in': state['active_books']}})
+        
+        # Debug print: show what filters are being applied
+        print("\n🔍 Search Debug Info:")
+        print(f"   Query: '{query}'")
+        
+        # ChromaDB requires $and operator for multiple conditions
+        where_filter = None
+        if len(filter_conditions) == 0:
+            where_filter = None
+            print("   Active Filters: None (searching all materials)")
+        elif len(filter_conditions) == 1:
+            where_filter = filter_conditions[0]
+            print(f"   Active Filters: {where_filter}")
+        else:
+            where_filter = {'$and': filter_conditions}
+            print(f"   Active Filters: {where_filter}")
         
         # Perform retrieval
         try:
-            if filter_conditions:
+            if where_filter:
                 docs = vectorstore.similarity_search(
                     query,
                     k=5,
-                    filter=filter_conditions
+                    filter=where_filter
                 )
             else:
                 docs = vectorstore.similarity_search(query, k=5)
             
+            # Debug print: show results count
+            print(f"   Results Found: {len(docs)} documents")
+            if docs:
+                # Show which books the results came from
+                books_found = set(doc.metadata.get('book_title', 'Unknown') for doc in docs)
+                print(f"   Sources: {', '.join(books_found)}")
+            else:
+                print("   ⚠️  No results matched your scope filters!")
+            
             if not docs:
-                return "No relevant information found in the current scope."
+                return "No relevant information found in the current scope. Try using 'clear' to search all materials or adjust your scope."
             
             # Format results
             results = []
             for i, doc in enumerate(docs):
                 metadata = doc.metadata
-                source_info = f"{metadata.get('book_title', 'Unknown')} (p. {metadata.get('page', 'N/A')})"
+                book_title = metadata.get('book_title', 'Unknown')
+                page_num = metadata.get('page', 'N/A')
+                subject = metadata.get('subject', 'Unknown')
+                semester = metadata.get('semester', 'Unknown')
+                
+                # Enhanced source info with clear page number
+                source_info = f"📚 {book_title} | 📄 Page {page_num} | 📁 {semester}/{subject}"
                 results.append(f"[{source_info}]\n{doc.page_content}")
             
             return "\n\n---\n\n".join(results)
             
         except Exception as e:
+            print(f"   ❌ Error: {str(e)}")
             return f"Error during retrieval: {str(e)}"
     
     return retriever_tool
@@ -621,17 +671,45 @@ class StudyRAGInterface:
                 self.state.get('active_semester'),
                 self.state.get('active_subject')
             )
-            print(f"\n📖 Available books:")
+            print("\n📖 Available books:")
             for book in books:
                 print(f"   - {book['book_id']}: {book['book_title']}")
         
         elif cmd == "use" and arg:
-            self.state['active_semester'] = arg
-            print(f"✅ Active semester: {arg}")
+            # Find the actual case-matched semester from vectorstore
+            available = self.catalog.list_semesters()
+            matched_semester = None
+            for s in available:
+                if s.lower() == arg.lower():
+                    matched_semester = s
+                    break
+            
+            if matched_semester:
+                self.state['active_semester'] = matched_semester
+                print(f"✅ Active semester: {matched_semester}")
+            else:
+                self.state['active_semester'] = arg
+                if available:
+                    print(f"⚠️  Note: '{arg}' not found. Available semesters: {', '.join(available)}")
+                print(f"✅ Active semester set to: {arg}")
         
         elif cmd == "open" and arg:
-            self.state['active_subject'] = arg
-            print(f"✅ Active subject: {arg}")
+            # Find the actual case-matched subject from vectorstore
+            available = self.catalog.list_subjects(self.state.get('active_semester'))
+            matched_subject = None
+            for s in available:
+                if s.lower() == arg.lower():
+                    matched_subject = s
+                    break
+            
+            if matched_subject:
+                self.state['active_subject'] = matched_subject
+                print(f"✅ Active subject: {matched_subject}")
+            else:
+                self.state['active_subject'] = arg
+                if available:
+                    print(f"⚠️  Note: '{arg}' not found. Available subjects: {', '.join(available)}")
+                print(f"✅ Active subject set to: {arg}")
         
         elif cmd == "select" and arg:
             if arg not in self.state['active_books']:

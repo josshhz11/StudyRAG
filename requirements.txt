@@ -8,3 +8,5 @@ python-dotenv
 chromadb
 langchain-chroma
 pypdf
+streamlit
+boto3

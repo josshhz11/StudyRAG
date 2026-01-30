@@ -1,0 +1,609 @@
+CONTINUED from context_agent.txt...
+
+User: taking the context of the app i have built locally and hosted on streamlit using localhost and also using my own local file directory as the object storage service,
+
+i'm wondering how i can design this app to scale for users on the web. will an object storage service like AWS S3 or Microsoft Azure Blob Storage be suitable to set up for different users, where each user has their own "directory" of "objects" (files like textbooks which they can upload), differentiated by their unique user ids?
+
+then i'm wondering if the textbooks/files will be automatically ingested into the vectordb upon upload into the user interface by the user once they have logged in. so this kind of gets rid of the need for the ingestion pipeline? as that checks the previous state when last ingested and compares to the current state and you can decide when to ingest, although i was thinking from a user's perspective it would be more intuitive to have it done automatically upon upload. 
+
+i'm also wondering if it would be better to set up vectordbs for each user? so that there is no way any user can cross-obtain materials and files from another user? or will that be too heavy? does vectordb work a little like a typical db like postgres?
+
+and lastly i'm wondering as well if the vectordb(s) should be set up in an object storage like S3 or blob storage and whether we should even keep the original documents as that would require double the space (keeping the chunks and embeddings + the original files)
+
+GitHub Copilot: I'll analyze your StudyRAG system and provide a comprehensive scaling strategy for a multi-user web deployment. 
+
+Read [](file:///c%3A/Users/joshua/OneDrive%20-%20Nanyang%20Technological%20University/Documents/Working%20Folder/Self-Study/Tech/StudyRAG/StudyRAGSystem.py#1-1), lines 1 to 100
+
+Read [](file:///c%3A/Users/joshua/OneDrive%20-%20Nanyang%20Technological%20University/Documents/Working%20Folder/Self-Study/Tech/StudyRAG/streamlit_app.py#1-1), lines 1 to 80
+
+## Multi-User Web Scaling Architecture
+
+Great questions! Here's a comprehensive strategy for scaling your StudyRAG system to a multi-user SaaS application:
+
+---
+
+## 1️⃣ **Object Storage: S3 / Azure Blob Storage**
+
+**✅ YES, highly recommended for user-uploaded PDFs**
+
+### Architecture Pattern:
+```
+S3/Blob Storage Structure:
+├── user_{user_id}/
+│   ├── raw/
+│   │   └── {semester}/{subject}/{book}/{filename}.pdf
+│   └── metadata/
+│       └── ingestion_log.json
+```
+
+### Why S3/Blob Storage:
+- **Scalable**: Handle millions of files without filesystem limits
+- **Cost-effective**: ~$0.023/GB/month (S3 Standard)
+- **Durable**: 99.999999999% durability (11 nines)
+- **Isolated**: Natural user isolation via prefixes (`user_123/`, `user_456/`)
+- **Pre-signed URLs**: Secure, temporary access for uploads/downloads
+
+---
+
+## 2️⃣ **Automatic Ingestion on Upload**
+
+**✅ YES, automatic ingestion is the right UX pattern**
+
+### Implementation Options:
+
+**Option A: Event-Driven (Recommended)**
+```
+User uploads PDF → S3 → S3 Event → Lambda/Cloud Function → Background Job → Vector DB
+```
+- **Async processing**: Upload returns immediately
+- **Scalable**: Auto-scales with upload volume
+- **Status tracking**: User sees "Processing..." → "Ready"
+
+**Option B: Synchronous (Simple)**
+```
+User uploads → API endpoint → Immediate processing → Vector DB
+```
+- **Simpler**: No queue infrastructure
+- **Blocking**: User waits for embedding (10-60 seconds)
+- **Timeout risk**: Large PDFs may exceed API gateway limits
+
+### Recommended Flow:
+```python
+# 1. User uploads via Streamlit file_uploader
+uploaded_file = st.file_uploader("Upload PDF")
+
+# 2. Store in S3 with user_id prefix
+s3_key = f"user_{user_id}/raw/{semester}/{subject}/{book}/{filename}"
+s3_client.upload_fileobj(uploaded_file, bucket, s3_key)
+
+# 3. Trigger async ingestion job
+task_id = celery_app.send_task('ingest_pdf', args=[user_id, s3_key])
+
+# 4. Show status
+st.info(f"⏳ Processing... Track status: {task_id}")
+```
+
+**You can keep the ingestion UI page** for:
+- Batch re-ingestion
+- Troubleshooting failed uploads
+- Manual metadata editing
+
+---
+
+## 3️⃣ **Vector DB Architecture: Per-User or Shared?**
+
+### Option A: **Shared Vector DB with Metadata Filtering** ✅ **RECOMMENDED**
+
+**Single Chroma/Qdrant/Pinecone instance, filter by `user_id`**
+
+```python
+# Every chunk gets metadata
+metadata = {
+    'user_id': 'user_123',  # ⭐ Critical isolation field
+    'semester': 'Y3S2',
+    'subject': 'NLP',
+    'book_id': 'speech_lang',
+    'source_path': 's3://bucket/user_123/...'
+}
+
+# Retrieval ALWAYS filters by user_id
+results = vectorstore.similarity_search(
+    query,
+    filter={'user_id': user_id}  # ⭐ Enforced at DB level
+)
+```
+
+**Pros:**
+- **Cost-effective**: One DB instance ($0 for Chroma, ~$70/mo for Qdrant Cloud starter)
+- **Simpler ops**: One connection pool, one backup, one monitoring dashboard
+- **Cross-user analytics**: Can track usage patterns (anonymized)
+- **Proven pattern**: Used by Notion, Slack, etc.
+
+**Cons:**
+- **Must enforce filters**: Security risk if you forget `user_id` filter (mitigated by middleware)
+- **Noisy neighbor**: One user's heavy queries affect others (mitigated by rate limiting)
+
+**Security Best Practices:**
+```python
+# Middleware to auto-inject user_id filter
+class UserScopedVectorStore:
+    def __init__(self, vectorstore, user_id):
+        self.vectorstore = vectorstore
+        self.user_id = user_id
+    
+    def similarity_search(self, query, filter=None, **kwargs):
+        # Force user_id filter
+        filter = filter or {}
+        filter['user_id'] = self.user_id  # ⭐ Always injected
+        return self.vectorstore.similarity_search(query, filter=filter, **kwargs)
+```
+
+---
+
+### Option B: **Per-User Vector DB Collections**
+
+**Chroma collections: `user_123_materials`, `user_456_materials`**
+
+**Pros:**
+- **Natural isolation**: No risk of cross-user data leaks
+- **Per-user tuning**: Different chunk sizes, embeddings per user
+
+**Cons:**
+- **Collection limits**: Chroma has ~1000 collection soft limit
+- **Connection overhead**: Each user query = new collection lookup
+- **Backup complexity**: 10,000 users = 10,000 collections to backup
+
+**When to use:**
+- Small user base (<100 users)
+- Regulatory requirements (HIPAA, GDPR) demanding physical isolation
+
+---
+
+### Option C: **Per-User Vector DB Instances** ❌ **NOT RECOMMENDED**
+
+**Separate Qdrant/Chroma server per user**
+
+**Cons:**
+- **Insanely expensive**: $70/user/month for Qdrant Cloud
+- **Operational nightmare**: Managing 10,000+ DB instances
+- **Cold start**: Inactive users = wasted resources
+
+---
+
+## 4️⃣ **Storage Costs: Keep Original PDFs or Not?**
+
+### Recommendation: **Keep PDFs in S3 Cold Storage** ✅
+
+**Why keep originals:**
+1. **Re-ingestion**: When you upgrade embedding models (e.g., OpenAI's next-gen)
+2. **Chunk tuning**: User wants larger/smaller chunks → re-process from source
+3. **Compliance**: Some industries require original documents (legal, medical)
+4. **User export**: "Download all my data" feature
+5. **Debugging**: Verify chunking quality vs. source
+
+**Cost optimization:**
+```
+S3 Storage Tiers:
+- Standard: $0.023/GB/month (instant access)
+- Infrequent Access: $0.0125/GB/month (ms latency)
+- Glacier Instant Retrieval: $0.004/GB/month (<100ms retrieval)
+```
+
+**Example cost (1000 users, 10 PDFs each @ 5MB avg):**
+```
+Storage: 1000 users × 10 PDFs × 5MB = 50GB
+S3 Glacier Instant: 50GB × $0.004 = $0.20/month
+Vector embeddings: 50GB × ~3,000 chunks/book × 6KB/chunk = ~900MB = $0.02/month
+```
+
+**Double storage is negligible** compared to:
+- Embedding API costs: $0.0001/1K tokens → ~$5-10 for 50GB of PDFs
+- Compute costs: Lambda executions, LLM queries
+
+---
+
+## 5️⃣ **Recommended Production Architecture**
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   USER FRONTEND                      │
+│              (Streamlit Cloud / Vercel)              │
+└──────────────┬──────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────┐
+│                  API GATEWAY                         │
+│          (FastAPI + Auth Middleware)                 │
+│   • JWT authentication                               │
+│   • Rate limiting per user                           │
+│   • Auto-inject user_id in all requests             │
+└──────┬────────────────────────┬─────────────────────┘
+       │                        │
+       ▼                        ▼
+┌──────────────┐      ┌────────────────────────────────┐
+│   AWS S3 /   │      │    VECTOR DB (Shared)          │
+│  Azure Blob  │      │  • Chroma (self-hosted)        │
+│              │      │  • Qdrant Cloud                │
+│ user_{id}/   │      │  • Pinecone                    │
+│   raw/       │      │                                │
+│   metadata/  │      │ Metadata per chunk:            │
+└──────┬───────┘      │   - user_id (filter key)       │
+       │              │   - semester/subject/book      │
+       │              │   - source_path (S3 key)       │
+       ▼              └────────────────────────────────┘
+┌──────────────┐               ▲
+│ EVENT QUEUE  │               │
+│  (Celery /   │───────────────┘
+│   AWS SQS)   │   Background ingestion jobs
+└──────────────┘
+```
+
+### Tech Stack Recommendation:
+
+**Backend:**
+- **API**: FastAPI (async, fast, Python-native)
+- **Auth**: Auth0 / Clerk / Supabase Auth
+- **Queue**: Celery + Redis (for async ingestion)
+- **Vector DB**: Qdrant Cloud (managed, $70-200/mo for 10K users) or self-hosted Chroma
+
+**Storage:**
+- **PDFs**: AWS S3 (Glacier Instant Retrieval for cost)
+- **Metadata**: PostgreSQL (user profiles, ingestion logs)
+
+**Frontend:**
+- **Streamlit Cloud** (easiest) or **Next.js** (more flexible)
+
+**Cost estimate (1000 active users):**
+```
+S3 storage:         $5/month
+Qdrant Cloud:       $70/month (Starter)
+PostgreSQL:         $15/month (RDS t3.micro)
+API hosting:        $25/month (2 containers)
+OpenAI embeddings:  $50/month (assuming 500 new PDFs/month)
+OpenAI chat:        $200/month (assuming 10K queries/month)
+────────────────────────────────────────────────────
+Total:              ~$365/month → $0.37/user/month
+```
+
+---
+
+## 6️⃣ **Migration Path from Your Current App**
+
+### Phase 1: Add Multi-User to Current Code
+1. Add `user_id` field to all metadata
+2. Wrap vectorstore with `UserScopedVectorStore` middleware
+3. Test with 2-3 dummy users locally
+
+### Phase 2: Add S3 Upload
+1. Replace file uploads with S3 pre-signed URLs
+2. Update `IngestionPipeline` to read from S3 instead of local filesystem
+
+### Phase 3: Add Async Processing
+1. Move ingestion to Celery/RQ background tasks
+2. Add job status tracking in PostgreSQL
+
+### Phase 4: Deploy
+1. Deploy API to AWS ECS / Google Cloud Run
+2. Deploy Streamlit to Streamlit Cloud
+3. Set up Qdrant Cloud or self-hosted Chroma
+
+---
+
+## Summary: Your Questions Answered
+
+| Question | Answer |
+|----------|--------|
+| **Use S3/Blob for user files?** | ✅ Yes, with `user_{id}/` prefixes |
+| **Auto-ingest on upload?** | ✅ Yes, via async event-driven pipeline |
+| **One DB or per-user DB?** | ✅ **Shared DB with `user_id` metadata filtering** (most scalable) |
+| **Store DB in S3?** | ❌ No, vector DBs need their own infrastructure (Chroma/Qdrant) |
+| **Keep original PDFs?** | ✅ Yes, in S3 Glacier (~$0.004/GB/mo) for re-ingestion |
+
+**Key principle:** Vector DBs work like Postgres (shared multi-tenant with row-level filtering), not like filesystems (one DB per user).
+
+Would you like me to create a proof-of-concept migration script or a multi-user authentication wrapper for your existing code?
+
+User: hmm im wondering if a simple streamlit UI is scalable (im using it just for prototyping), or a proper frontend like React/NextJS is required? can be hosted on vercel for free
+
+also would a backend in Java using springboot or even Golang for example with the entire codebase in Java be better? as this requires lots of object creation for different classes of objects that do different things. would this be more optimal? or is python cleaner and easier? also, i'm wondering if langgraph and this agent aspect of the code is available in Java?
+
+furthermore, i wanted to figure out what's the tradeoffs when deciding chunk size, as in my current app there is a chunk_size of 1000 and a chunk_overlap of 200. this was obtained from a tutorial i did on langgraph but i wasn't sure about the tradeoffs on the decision making
+
+GitHub Copilot: Great questions about scaling, language choices, and chunk sizing! Let me break this down comprehensively:
+
+---
+
+## 1️⃣ **Streamlit vs React/Next.js for Production**
+
+### Streamlit Limitations at Scale:
+
+**Performance Issues:**
+- **Full page rerun**: Every interaction re-executes the entire Python script
+- **No client-side state**: All state lives on the server → high memory usage
+- **Websocket overhead**: Every widget change = server roundtrip
+- **Concurrency limits**: Default Streamlit Cloud = 1 CPU core per app
+
+**Real-world breaking point:**
+```
+< 100 concurrent users: Streamlit is fine
+100-500 users: Noticeable lag, need multiple instances
+> 500 users: Becomes expensive/slow (need load balancer + many containers)
+```
+
+**Cost at scale (1000 concurrent users):**
+- Streamlit Cloud: Not feasible (max ~50 concurrent users per free tier)
+- Self-hosted: ~10 containers × $25 = **$250/month** just for frontend
+
+---
+
+### Next.js/React Advantages:
+
+**Performance:**
+- **Client-side rendering**: UI interactions happen locally (instant)
+- **Static generation**: Pre-render pages → serve from CDN (~$0.01/GB)
+- **Code splitting**: Only load needed JavaScript chunks
+- **API routes**: Separate backend API from UI
+
+**Scalability:**
+```
+Vercel Free Tier:
+- 100GB bandwidth/month
+- Serverless functions (no server management)
+- Global CDN (fast everywhere)
+
+Handles ~10,000 monthly active users easily on free tier
+```
+
+**Cost at scale (10,000 users):**
+- Vercel Pro: **$20/month** (400GB bandwidth, unlimited functions)
+- vs Streamlit: **$500+/month** (many containers)
+
+---
+
+### Recommendation:
+
+| Stage | Frontend | Reason |
+|-------|----------|--------|
+| **Prototype** (now) | Streamlit | Build in 1/10th the time, test UX |
+| **MVP** (<500 users) | Streamlit + FastAPI backend | Streamlit for UI, FastAPI for heavy ops |
+| **Production** (>500 users) | Next.js + FastAPI backend | Scalable, cost-efficient, professional |
+
+**Hybrid approach (best of both worlds):**
+```
+Phase 1: Pure Streamlit (what you have now)
+Phase 2: Streamlit UI + FastAPI backend (separate retrieval logic)
+Phase 3: Next.js UI + FastAPI backend (full rewrite)
+```
+
+---
+
+## 2️⃣ **Python vs Java/Golang for Backend**
+
+### Your Use Case: RAG System with LangGraph
+
+**Python is the clear winner because:**
+
+1. **LangChain/LangGraph ecosystem**: No equivalent in Java/Go
+   - LangGraph: Python-only (as of Jan 2026)
+   - LangChain Java: Exists but limited (no graph-based agents)
+   - Go: No LangChain equivalent
+
+2. **LLM library support**:
+   ```python
+   # Python (native)
+   OpenAI, Anthropic, Cohere → First-class SDKs
+   
+   # Java (wrappers)
+   openai-java → Community-maintained, lags behind
+   
+   # Go
+   go-openai → Basic, no agent frameworks
+   ```
+
+3. **ML/AI ecosystem**:
+   - Vector DBs: Chroma (Python-first), Qdrant (Python SDK best)
+   - Embeddings: Sentence Transformers, HuggingFace → Python-native
+   - PDF parsing: pypdf, unstructured → Python-only
+
+---
+
+### When Java/Go Makes Sense:
+
+**Use Java/Spring Boot if:**
+- You're building a **high-throughput transaction system** (e.g., fintech, e-commerce)
+- You need **low-latency microservices** (<10ms response time)
+- You have **existing Java infrastructure**
+
+**Use Golang if:**
+- You're building **infrastructure tools** (CLI, DevOps, proxies)
+- You need **ultra-low memory** footprint (Go uses ~10MB, Python ~50MB)
+- You need **compiled binaries** (single executable distribution)
+
+**For RAG/LLM apps: Python is 5-10x faster to develop** and has 100x more libraries.
+
+---
+
+### Performance Comparison:
+
+| Aspect | Python (FastAPI) | Java (Spring Boot) | Go |
+|--------|------------------|--------------------|----|
+| **Cold start** | 500ms | 2-5s | 50ms |
+| **Memory usage** | 50-100MB | 200-500MB | 10-30MB |
+| **Development speed** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ |
+| **LLM libraries** | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐ |
+| **Concurrency** | ⭐⭐⭐⭐ (async) | ⭐⭐⭐⭐⭐ (threads) | ⭐⭐⭐⭐⭐ (goroutines) |
+| **Ecosystem for RAG** | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐ |
+
+**For your RAG system: Python + FastAPI is optimal.**
+
+---
+
+### Architecture Pattern (Production-Ready):
+
+```
+┌─────────────────────────────────────────────┐
+│     Next.js Frontend (Vercel)               │
+│  - Chat UI, file uploads, auth             │
+└──────────────┬──────────────────────────────┘
+               │ REST/GraphQL API
+               ▼
+┌─────────────────────────────────────────────┐
+│   Python FastAPI Backend (AWS ECS/GCP Run)  │
+│  - LangGraph agent logic                    │
+│  - PDF ingestion pipeline                   │
+│  - Vector DB queries                        │
+└──────┬─────────────────────┬────────────────┘
+       │                     │
+       ▼                     ▼
+┌──────────────┐      ┌──────────────────────┐
+│   AWS S3     │      │  Qdrant / Chroma     │
+│  (PDFs)      │      │  (Vector embeddings) │
+└──────────────┘      └──────────────────────┘
+```
+
+**Why this stack:**
+- **Next.js**: Best React framework, Vercel hosting = $0-20/mo
+- **FastAPI**: Fastest Python web framework (async, OpenAPI docs)
+- **Python**: LangGraph, LangChain, ML ecosystem
+- **S3**: Cheapest blob storage ($0.023/GB)
+- **Qdrant**: Managed vector DB ($70-200/mo for 1M+ vectors)
+
+---
+
+## 3️⃣ **Chunk Size & Overlap: Trade-offs**
+
+Your current settings: `chunk_size=1000, chunk_overlap=200`
+
+### Understanding the Parameters:
+
+**Chunk Size:**
+- **What it is**: Number of characters per chunk
+- **Your setting**: 1000 chars ≈ 200-250 words ≈ 1-2 paragraphs
+
+**Chunk Overlap:**
+- **What it is**: How many characters overlap between consecutive chunks
+- **Your setting**: 200 chars ≈ 40-50 words
+
+---
+
+### Chunk Size Trade-offs:
+
+| Size | Pros | Cons | Use Case |
+|------|------|------|----------|
+| **Small (500-800)** | • Precise retrieval<br>• Lower cost (fewer tokens)<br>• Fast embedding | • Loses context<br>• Need more chunks<br>• May split key concepts | Code snippets, Q&A, definitions |
+| **Medium (1000-1500)** | ⭐ **Balanced**<br>• Good context<br>• Good precision<br>• Reasonable cost | • None (sweet spot) | **Textbooks, documentation** (your use case) |
+| **Large (2000-4000)** | • Full context<br>• Fewer chunks<br>• Better for complex topics | • Less precise<br>• Higher embedding cost<br>• May retrieve irrelevant text | Research papers, legal docs |
+
+---
+
+### Chunk Overlap Trade-offs:
+
+| Overlap | Pros | Cons | Use Case |
+|---------|------|------|----------|
+| **0% (no overlap)** | • Minimal redundancy<br>• Lowest storage | • May split key sentences<br>• Context loss at boundaries | Short documents, FAQs |
+| **10-20%** (your 200/1000 = 20%) | ⭐ **Balanced**<br>• Captures split concepts<br>• Reasonable redundancy | • Slight storage increase | **General RAG (your use case)** |
+| **30-50%** | • Strong context preservation<br>• Good for complex queries | • High redundancy<br>• More storage/cost | Scientific papers, legal |
+
+---
+
+### Optimal Settings for Your Use Case (Textbooks):
+
+**Current settings are excellent:**
+```python
+chunk_size=1000,      # Good for textbook paragraphs
+chunk_overlap=200     # 20% overlap catches split concepts
+```
+
+**Why this works:**
+1. **Textbook paragraphs**: Typically 150-300 words → fits in 1000 chars
+2. **Conceptual coherence**: A paragraph usually covers one idea
+3. **Cross-boundary capture**: 200-char overlap catches concepts split across chunks
+4. **Cost-effective**: ~3,000-8,000 chunks per 600-page book (reasonable)
+
+---
+
+### When to Adjust:
+
+**Use smaller chunks (700-800) if:**
+- Users ask very specific questions ("Define X")
+- Textbooks have short paragraphs or bullet points
+- You want to minimize retrieval of irrelevant text
+
+**Use larger chunks (1500-2000) if:**
+- Textbooks have long, interconnected explanations
+- Users ask complex, multi-step questions
+- You're retrieving from research papers or case studies
+
+**Increase overlap (30%+) if:**
+- You see important concepts split across chunks in retrieval results
+- Textbooks have continuous narrative (not sectioned)
+
+**Decrease overlap (10%) if:**
+- You want to reduce storage costs
+- Textbooks are well-structured with clear section boundaries
+
+---
+
+### Advanced: Adaptive Chunking
+
+For production, consider **semantic chunking** instead of fixed-size:
+
+```python
+from langchain_experimental.text_splitter import SemanticChunker
+
+splitter = SemanticChunker(
+    embeddings,
+    breakpoint_threshold_type="percentile"  # Split at semantic boundaries
+)
+```
+
+**Benefits:**
+- Chunks end at paragraph/section boundaries
+- Preserves conceptual coherence
+- Better retrieval quality
+
+**Trade-off:** Slower ingestion (needs embeddings during chunking)
+
+---
+
+### Cost Impact of Chunk Size:
+
+**Example: 10 textbooks, 600 pages each**
+
+| Chunk Size | Total Chunks | Embedding Cost | Storage | Retrieval Latency |
+|------------|--------------|----------------|---------|-------------------|
+| 500 | ~120,000 | $10 | 700MB | Fast (more chunks to score) |
+| **1000** | **~60,000** | **$5** | **360MB** | **Balanced** |
+| 2000 | ~30,000 | $2.50 | 180MB | Slower (larger chunks to process) |
+
+*Embedding cost: OpenAI text-embedding-3-small @ $0.00002/1K tokens*
+
+---
+
+## 📋 **Recommendations Summary**
+
+### Immediate (Prototype Phase):
+- ✅ **Keep Streamlit** for rapid iteration
+- ✅ **Keep Python + LangGraph** (no Java/Go equivalent)
+- ✅ **Keep chunk_size=1000, overlap=200** (optimal for textbooks)
+
+### Next 3-6 Months (MVP):
+- 🔄 **Separate backend**: FastAPI + Celery for async ingestion
+- 🔄 **Add S3**: Replace local filesystem
+- 🔄 **Test chunk settings**: Log retrieval quality, adjust if needed
+
+### Production (6-12 Months):
+- 🚀 **Migrate to Next.js frontend** (deploy on Vercel free tier)
+- 🚀 **Keep Python backend** (FastAPI on AWS ECS/GCP Cloud Run)
+- 🚀 **Add semantic chunking** for better retrieval
+
+### Cost Projection (10,000 users):
+```
+Streamlit approach:     $500-800/month
+Next.js + FastAPI:      $100-200/month  ⭐ Recommended
+Java approach:          $300-500/month (no LangGraph, slower dev)
+```
+
+---
+
+Want me to create a FastAPI backend blueprint that wraps your existing LangGraph code, or show you how to migrate to semantic chunking?
