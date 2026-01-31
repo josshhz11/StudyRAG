@@ -3,9 +3,9 @@ Authentication router - signup, login, logout, profile
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
-from backend.core.dependencies import get_supabase_client, get_current_user
-from backend.models.requests import SignUpRequest, LoginRequest
-from backend.models.responses import AuthResponse, UserResponse, MessageResponse
+from core.dependencies import get_supabase_client, get_current_user
+from models.requests import SignUpRequest, LoginRequest
+from models.responses import AuthResponse, UserResponse, MessageResponse
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 

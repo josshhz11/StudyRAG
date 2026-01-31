@@ -35,7 +35,7 @@ try:
             }
         })
         if response.user:
-            print(f"✅ Test signup successful!")
+            print("✅ Test signup successful!")
             print(f"   User ID: {response.user.id}")
             print(f"   Email: {response.user.email}")
     except Exception as e:

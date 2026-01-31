@@ -21,6 +21,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ===== AUTHENTICATION CHECK =====
+if not st.session_state.get('authenticated'):
+    st.warning("⚠️ Please login to access the chat interface")
+    st.info("👉 Go to the **🔐 Login** page to sign in or create an account")
+    
+    if st.button("Go to Login Page", type="primary"):
+        st.switch_page("pages/0_🔐_Login.py")
+    
+    st.stop()
+# ================================
+
 # Custom CSS for better styling
 st.markdown("""
     <style>

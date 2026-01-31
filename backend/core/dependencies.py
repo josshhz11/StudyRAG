@@ -3,7 +3,7 @@ FastAPI dependencies for authentication and database access
 """
 from fastapi import Depends, HTTPException, Header, status
 from supabase import create_client, Client
-from backend.core.config import settings
+from core.config import settings
 from typing import Optional
 
 # Initialize Supabase client
@@ -74,8 +74,6 @@ async def get_optional_user(
     
     token = authorization.replace("Bearer ", "")
     
-    try:
-        user = supabase.auth.get_user(token)
-        return user.user.id if user and user.user else None
-    except:
-        return None
+    user = supabase.auth.get_user(token)
+    return user.user.id if user and user.user else None
+    

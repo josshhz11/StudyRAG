@@ -148,6 +148,7 @@ class S3StorageAdapter(StorageAdapter):
         """
         List all PDFs in S3 bucket under user's prefix.
         Expected structure: users/{user_id}/raw_data/semester/subject/book/filename.pdf
+        Returns empty list if user folder doesn't exist (not created yet).
         """
         pdfs = []
         full_prefix = self._get_user_prefix() + prefix
@@ -158,6 +159,7 @@ class S3StorageAdapter(StorageAdapter):
             
             for page in pages:
                 if 'Contents' not in page:
+                    # No objects found - user folder doesn't exist yet (first time user)
                     continue
                 
                 for obj in page['Contents']:
@@ -185,11 +187,16 @@ class S3StorageAdapter(StorageAdapter):
         return pdfs
     
     def upload_file(self, file_data: BinaryIO, key: str) -> bool:
-        """Upload a file to S3"""
+        """
+        Upload a file to S3.
+        
+        Note: key should be the full S3 path including users/{user_id}/raw_data/...
+        This creates the folder structure on-demand (S3 creates paths automatically).
+        """
         try:
-            full_key = self._get_user_prefix() + key
-            self.s3_client.upload_fileobj(file_data, self.bucket_name, full_key)
-            print(f"✅ Uploaded to S3: {full_key}")
+            # Key already includes full path from backend, don't prepend user prefix
+            self.s3_client.upload_fileobj(file_data, self.bucket_name, key)
+            print(f"✅ Uploaded to S3: {key}")
             return True
         except Exception as e:
             print(f"❌ Error uploading to S3: {e}")

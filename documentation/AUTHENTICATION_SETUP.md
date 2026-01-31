@@ -76,7 +76,7 @@ CREATE POLICY "Users can update own profile"
     ON public.user_profiles FOR UPDATE 
     USING (auth.uid() = user_id);
 
--- User preferences
+-- User preferences (optional for now - not the most important, will still create but wont do much for this now)
 CREATE TABLE public.user_preferences (
     user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     default_semester VARCHAR(50),

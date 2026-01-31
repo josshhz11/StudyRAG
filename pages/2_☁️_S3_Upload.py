@@ -13,6 +13,17 @@ st.set_page_config(
     layout="wide"
 )
 
+# ===== AUTHENTICATION CHECK =====
+if not st.session_state.get('authenticated'):
+    st.warning("⚠️ Please login to access file management")
+    st.info("👉 Go to the **🔐 Login** page to sign in or create an account")
+    
+    if st.button("Go to Login Page", type="primary"):
+        st.switch_page("pages/0_🔐_Login.py")
+    
+    st.stop()
+# ================================
+
 # Custom CSS for drag-drop and folder tree
 st.markdown("""
     <style>
@@ -77,8 +88,16 @@ if storage_mode != 's3':
 
 # Initialize S3 adapter
 try:
-    storage = get_storage_adapter('s3')
+    # Get user_id from session state
+    user_id = st.session_state.get('user_id')
+    if not user_id:
+        st.error("❌ User ID not found in session. Please login again.")
+        st.stop()
+    
+    # Initialize storage with user_id for isolation
+    storage = get_storage_adapter(user_id=user_id)
     st.success(f"✅ Connected to S3: {os.getenv('S3_BUCKET_NAME')}")
+    st.info(f"📁 Your storage: `users/{user_id}/raw_data/`")
 except Exception as e:
     st.error(f"❌ Failed to connect to S3: {e}")
     with st.expander("🔍 Troubleshooting"):
@@ -176,8 +195,12 @@ with tab1:
     st.markdown("### 📤 Upload New Textbook")
     
     # Get current files to populate folder options
-    existing_pdfs = storage.list_pdfs()
+    existing_pdfs = storage.list_pdfs()  # Returns [] if user folder doesn't exist yet
     folder_tree = build_folder_tree(existing_pdfs)
+    
+    # Show helpful message for first-time users
+    if not existing_pdfs:
+        st.info("👋 Welcome! This is your first time uploading. Create your folder structure below.")
     
     col1, col2 = st.columns([1, 1])
     
@@ -250,13 +273,23 @@ with tab1:
             
             success_count = 0
             for idx, file in enumerate(uploaded_files):
-                progress = (idx + 1) / len(uploaded_files)
-                progress_bar.progress(progress)
-                status.text(f"Uploading {file.name}...")
+                # Full S3 key with user isolation
+                user_id = st.session_state.get('user_id')
+                s3_key = f"users/{user_id}/raw_data/{target_path}/{file.name}"
+                file.seek(0)
+                
+                import io
+                if storage.upload_file(io.BytesIO(file.read())le.name}...")
                 
                 s3_key = f"{target_path}/{file.name}"
                 file.seek(0)
                 if storage.upload_file(file, s3_key):
+            
+            if success_count > 0:
+                st.balloons()
+                if not existing_pdfs:
+                    st.success("🎉 Your user folder has been created! Future uploads will be faster.")
+            
                     success_count += 1
             
             status.text("Complete!")

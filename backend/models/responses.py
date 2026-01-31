@@ -3,6 +3,12 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+# Generic response
+class MessageResponse(BaseModel):
+    """Generic success/error message response"""
+    message: str
+    details: Optional[Dict[str, Any]] = None
+
 class UserResponse(BaseModel):
     """User information response"""
     user_id: str

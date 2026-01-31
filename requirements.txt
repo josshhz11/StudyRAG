@@ -10,3 +10,9 @@ langchain-chroma
 pypdf
 streamlit
 boto3
+supabase
+pydantic
+fastapi
+uvicorn
+python-multipart
+python-jose[cryptography]# For JWT token handling
