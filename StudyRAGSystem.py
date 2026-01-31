@@ -12,6 +12,11 @@ from langchain_chroma import Chroma
 from langchain_core.tools import tool
 import json
 from datetime import datetime
+import tempfile
+
+from storage_adapter import get_storage_adapter
+
+load_dotenv()
 
 # Global constants
 BASE_DIR = Path(__file__).parent
@@ -19,6 +24,7 @@ RAW_DATA_DIR = BASE_DIR / "raw_data"
 VECTORSTORE_DIR = BASE_DIR / "vectorstore"
 CACHE_DIR = BASE_DIR / "cache"
 COLLECTION_NAME = "study_materials"
+STORAGE_MODE = os.getenv('STORAGE_MODE', 'local')
 
 SYSTEM_PROMPT = """
 You are an intelligent study assistant who helps students navigate and learn from their textbook collection.
@@ -48,12 +54,13 @@ class AgentState(TypedDict):
 class IngestionPipeline:
     """Handles PDF ingestion, chunking, and embedding into vector store."""
     
-    def __init__(self, embeddings):
+    def __init__(self, embeddings, storage_adapter=None):
         self.embeddings = embeddings
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200
         )
+        self.storage = storage_adapter or get_storage_adapter()
     
     def scan_library(self) -> Dict[str, List[Dict]]:
         """
@@ -61,76 +68,63 @@ class IngestionPipeline:
         Structure: raw_data/semester/subject/book/*.pdf
         """
         library_structure = {}
+
+        pdfs = self.storage.list_pdfs()
         
-        if not RAW_DATA_DIR.exists():
-            print(f"Warning: {RAW_DATA_DIR} does not exist")
+        if not pdfs:
+            print("Warning: No PDFs found in storage")
             return library_structure
         
-        # Scan directory structure
-        for semester_dir in RAW_DATA_DIR.iterdir():
-            if not semester_dir.is_dir():
-                continue
-            
-            semester = semester_dir.name
-            library_structure[semester] = []
-            
-            for subject_dir in semester_dir.iterdir():
-                if not subject_dir.is_dir():
-                    continue
-                
-                subject = subject_dir.name
-                
-                # Look for PDFs in subject/book directories
-                for book_dir in subject_dir.iterdir():
-                    if not book_dir.is_dir():
-                        continue
-                    
-                    book_id = book_dir.name
-                    
-                    # Find all PDFs in this book directory
-                    pdf_files = list(book_dir.glob("*.pdf"))
-                    
-                    for pdf_file in pdf_files:
-                        library_structure[semester].append({
-                            'semester': semester,
-                            'subject': subject,
-                            'book_id': book_id,
-                            'book_title': pdf_file.stem,
-                            'pdf_path': str(pdf_file),
-                            'source_path': str(pdf_file.relative_to(RAW_DATA_DIR))
-                        })
+        # Organize by semester
+        for pdf in pdfs:
+            semester = pdf['semester']
+            if semester not in library_structure:
+                library_structure[semester] = []
+
+            library_structure[semester].append({
+                'semester': pdf['semester'],
+                'subject': pdf['subject'],
+                'book_id': pdf['book_id'],
+                'book_title': pdf['book_title'],
+                'storage_key': pdf['key'],  # S3 key or relative path
+                'source_path': pdf['key']   # For backward compatibility
+            })
         
         return library_structure
     
     def get_existing_books_in_vectorstore(self, vectorstore) -> set:
         """Query vectorstore to find which books have already been ingested."""
-        try:
-            # Get a sample of documents to check metadata
-            collection = vectorstore._collection
-            results = collection.get(limit=1000)  # Sample to find unique books
-            
-            existing_books = set()
-            if results and 'metadatas' in results:
-                for metadata in results['metadatas']:
-                    if metadata and 'source_path' in metadata:
-                        existing_books.add(metadata['source_path'])
-            
-            return existing_books
-        except:
-            return set()
+        # Get a sample of documents to check metadata
+        collection = vectorstore._collection
+        results = collection.get(limit=1000)  # Sample to find unique books
+        
+        existing_books = set()
+        if results and 'metadatas' in results:
+            for metadata in results['metadatas']:
+                if metadata and 'source_path' in metadata:
+                    existing_books.add(metadata['source_path'])
+        
+        return existing_books
     
-    def ingest_pdf(self, book_info: Dict) -> int:
+    def ingest_pdf(self, book_info: Dict) -> List:
         """
-        Load a PDF, chunk it, and return documents with metadata.
-        Returns number of chunks created.
+        Load a PDF from storage, chunk it, and return documents with metadata.
+        Returns list of chunks.
         """
-        pdf_path = book_info['pdf_path']
-        
-        if not os.path.exists(pdf_path):
-            print(f"  ⚠️  PDF not found: {pdf_path}")
-            return 0
+        storage_key = book_info['storage_key']
         
         try:
+            # NEW: Download PDF to temp file if using S3
+            if isinstance(self.storage, type(get_storage_adapter('s3'))):
+                # S3: Download to temp file
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                    temp_path = tmp_file.name
+                    self.storage.download_to_temp(storage_key, temp_path)
+                    pdf_path = temp_path
+            else:
+                # Local: Use direct path
+                pdf_path = book_info.get('local_path') or str(RAW_DATA_DIR / storage_key)
+            
             # Load PDF
             loader = PyPDFLoader(pdf_path)
             pages = loader.load()
@@ -148,10 +142,14 @@ class IngestionPipeline:
             # Chunk the pages
             chunks = self.text_splitter.split_documents(pages)
             
+            # Clean up temp file if S3
+            if isinstance(self.storage, type(get_storage_adapter('s3'))):
+                os.unlink(pdf_path)
+            
             return chunks
             
         except Exception as e:
-            print(f"  ❌ Error processing {pdf_path}: {str(e)}")
+            print(f"  ❌ Error processing {storage_key}: {str(e)}")
             return []
     
     def ingest_all(self, force_reingest: bool = False):
@@ -574,7 +572,6 @@ class StudyRAGInterface:
     """Main interface for the Study RAG system."""
     
     def __init__(self):
-        load_dotenv()
         self.llm, self.embeddings = initialize_models()
         self.ingestion_pipeline = IngestionPipeline(self.embeddings)
         self.vectorstore = None
