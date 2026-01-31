@@ -158,7 +158,7 @@ In each protected request:
 ```json
 {
   "files": [],
-  "total_count": 0
+  "total": 0
 }
 ```
 
@@ -212,16 +212,16 @@ In each protected request:
 {
   "files": [
     {
-      "file_key": "users/12345678.../raw_data/Y3S2/NLP/TextbookCh1/yourfile.pdf",
-      "filename": "yourfile.pdf",
+      "key": "users/12345678.../raw_data/Y3S2/NLP/TextbookCh1/yourfile.pdf",
       "semester": "Y3S2",
       "subject": "NLP",
-      "book": "TextbookCh1",
-      "size_bytes": 123456,
-      "uploaded_at": null
+      "book_id": "TextbookCh1",
+      "book_title": "yourfile",
+      "size": 123456,
+      "s3_url": "s3://studyrag-prototyping-s3-bucket-1/users/12345678.../raw_data/Y3S2/NLP/TextbookCh1/yourfile.pdf"
     }
   ],
-  "total_count": 1
+  "total": 1
 }
 ```
 
@@ -281,6 +281,7 @@ In each protected request:
 ```json
 {
   "message": "File deleted successfully",
+  "success": true,
   "details": {
     "deleted_key": "users/12345678.../..."
   }

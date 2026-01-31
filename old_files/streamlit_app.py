@@ -27,7 +27,8 @@ if not st.session_state.get('authenticated'):
     st.info("👉 Go to the **🔐 Login** page to sign in or create an account")
     
     if st.button("Go to Login Page", type="primary"):
-        st.switch_page("pages/0_🔐_Login.py")
+        # Use path without emoji - Streamlit can be finicky with emojis in paths
+        st.switch_page("pages/0_Login.py")
     
     st.stop()
 # ================================
