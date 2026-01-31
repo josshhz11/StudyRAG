@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from typing import List
 from core.dependencies import get_current_user
 from models.responses import FileInfo, FilesResponse, MessageResponse
-from storage_adapter import get_storage_adapter
+from services.storage_adapter import get_storage_adapter
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 

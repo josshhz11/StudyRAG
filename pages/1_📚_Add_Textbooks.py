@@ -1,6 +1,6 @@
 import streamlit as st
 from dotenv import load_dotenv
-from StudyRAGSystem import (
+from backend.services.StudyRAGSystem import (
     IngestionPipeline,
     initialize_models,
     RAW_DATA_DIR,

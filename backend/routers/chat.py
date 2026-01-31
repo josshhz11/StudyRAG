@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from core.dependencies import get_current_user
 from models.requests import ChatRequest
 from models.responses import ChatResponse
-from StudyRAGSystem import StudyRAGSystem
+from services.StudyRAGSystem import StudyRAGSystem
 from langchain_core.messages import HumanMessage
 import os
 

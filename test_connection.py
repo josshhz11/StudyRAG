@@ -1,5 +1,5 @@
 # test_s3_connection.py
-from storage_adapter import S3StorageAdapter
+from backend.services.storage_adapter import S3StorageAdapter
 import os
 from dotenv import load_dotenv
 

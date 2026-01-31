@@ -1,6 +1,6 @@
 import streamlit as st
 from dotenv import load_dotenv
-from StudyRAGSystem import (
+from backend.services.StudyRAGSystem import (
     initialize_models,
     Catalog,
     build_study_agent,
