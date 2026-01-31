@@ -1,6 +1,6 @@
 import streamlit as st
 from dotenv import load_dotenv
-from storage_adapter import get_storage_adapter, S3StorageAdapter
+from backend.services.storage_adapter import get_storage_adapter, S3StorageAdapter
 import os
 from collections import defaultdict
 from pathlib import Path

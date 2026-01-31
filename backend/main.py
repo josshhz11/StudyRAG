@@ -27,6 +27,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router)
+app.include_router(files.router)
+app.include_router(chat.router)
 
 # Root endpoint
 @app.get("/")

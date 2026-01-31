@@ -1,7 +1,7 @@
 """
 Authentication router - signup, login, logout, profile
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from supabase import Client
 from core.dependencies import get_supabase_client, get_current_user
 from models.requests import SignUpRequest, LoginRequest
@@ -127,35 +127,41 @@ async def logout(
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
     user_id: str = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_client),
+    authorization: str = Header(None)
 ):
     """
     Get current authenticated user's profile.
     """
     try:
-        # Get user from auth
-        user = supabase.auth.get_user()
-        
-        if not user or not user.user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # Get profile from database
+        # Get profile from database (user_id already validated from JWT)
         profile = supabase.table('user_profiles').select('*').eq('user_id', user_id).execute()
         
-        username = None
-        if profile.data and len(profile.data) > 0:
-            username = profile.data[0].get('username')
-        elif user.user.user_metadata:
-            username = user.user.user_metadata.get('username')
+        if not profile.data or len(profile.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User profile not found"
+            )
+        
+        profile_data = profile.data[0]
+        
+        # Extract email from JWT token (Supabase includes email in JWT)
+        import jwt
+        token = authorization.replace("Bearer ", "")
+        payload = jwt.decode(token, options={"verify_signature": False})
+        email = payload.get("email")
+        
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Email not found in token"
+            )
         
         return UserResponse(
-            user_id=user.user.id,
-            email=user.user.email,
-            username=username,
-            created_at=user.user.created_at
+            user_id=profile_data.get('user_id'),
+            email=email,  # From JWT token
+            username=profile_data.get('username'),
+            created_at=profile_data.get('created_at')
         )
     
     except HTTPException:

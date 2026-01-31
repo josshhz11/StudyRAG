@@ -26,40 +26,26 @@ async def list_user_files(
         storage = get_storage_adapter(user_id=user_id)
         
         # List all PDFs in user's directory (returns [] if folder doesn't exist)
+        # Note: list_pdfs() returns list of dicts, not strings
         pdf_files = storage.list_pdfs()
         
         # Convert to FileInfo objects
         files = []
-        for pdf_path in pdf_files:
-            # Extract metadata from path
-            # Format: users/{user_id}/raw_data/semester/subject/book/file.pdf
-            parts = pdf_path.split('/')
-            
-            if len(parts) >= 6:
-                semester = parts[3]
-                subject = parts[4]
-                book = parts[5]
-                filename = parts[-1]
-                
-                # Get file size if available
-                try:
-                    file_size = storage.get_file_size(pdf_path)
-                except:
-                    file_size = 0
-                
-                files.append(FileInfo(
-                    file_key=pdf_path,
-                    filename=filename,
-                    semester=semester,
-                    subject=subject,
-                    book=book,
-                    size_bytes=file_size,
-                    uploaded_at=None  # Can add metadata later
-                ))
+        for pdf_dict in pdf_files:
+            # pdf_dict has keys: 'key', 'semester', 'subject', 'book_id', 'book_title', 'size', 's3_url'
+            files.append(FileInfo(
+                key=pdf_dict.get('key', ''),
+                semester=pdf_dict.get('semester', ''),
+                subject=pdf_dict.get('subject', ''),
+                book_id=pdf_dict.get('book_id', ''),
+                book_title=pdf_dict.get('book_title', ''),
+                size=pdf_dict.get('size', 0),
+                s3_url=pdf_dict.get('s3_url')
+            ))
         
         return FilesResponse(
             files=files,
-            total_count=len(files)
+            total=len(files)
         )
     
     except Exception as e:
@@ -105,16 +91,16 @@ async def upload_file(
         import io
         storage.upload_file(io.BytesIO(content), s3_key)
         
-        return MessageResponse(
-            message=f"File '{file.filename}' uploaded successfully",
-            details={
+        return {
+            "message": f"File '{file.filename}' uploaded successfully",
+            "details": {
                 "s3_key": s3_key,
                 "size_bytes": len(content),
                 "semester": semester,
                 "subject": subject,
                 "book": book
             }
-        )
+        }
     
     except Exception as e:
         raise HTTPException(

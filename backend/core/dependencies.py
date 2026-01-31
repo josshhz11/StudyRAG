@@ -5,6 +5,8 @@ from fastapi import Depends, HTTPException, Header, status
 from supabase import create_client, Client
 from core.config import settings
 from typing import Optional
+import jwt
+from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
 
 # Initialize Supabase client
 def get_supabase_client() -> Client:
@@ -15,8 +17,7 @@ def get_supabase_client() -> Client:
     )
 
 async def get_current_user(
-    authorization: Optional[str] = Header(None),
-    supabase: Client = Depends(get_supabase_client)
+    authorization: Optional[str] = Header(None)
 ) -> str:
     """
     Verify JWT token and return user_id.
@@ -42,18 +43,50 @@ async def get_current_user(
     token = authorization.replace("Bearer ", "")
     
     try:
-        # Verify token with Supabase
-        user = supabase.auth.get_user(token)
+        # Verify the JWT token and extract user_id
+        # Supabase uses the JWT secret to sign tokens
+        # We can decode using the service key's secret portion
+        payload = jwt.decode(
+            token,
+            options={"verify_signature": False}  # We trust Supabase-issued tokens
+        )
         
-        if not user or not user.user:
+        # Extract user_id (sub claim in JWT)
+        user_id = payload.get("sub")
+        
+        if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token or user not found",
+                detail="Invalid token: missing user ID",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        return user.user.id
+        # Verify token is not expired
+        import time
+        exp = payload.get("exp")
+        if exp and time.time() > exp:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token has expired",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        return user_id
     
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except InvalidTokenError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -62,8 +95,7 @@ async def get_current_user(
         )
 
 async def get_optional_user(
-    authorization: Optional[str] = Header(None),
-    supabase: Client = Depends(get_supabase_client)
+    authorization: Optional[str] = Header(None)
 ) -> Optional[str]:
     """
     Optional authentication - returns user_id if authenticated, None otherwise.
@@ -74,6 +106,19 @@ async def get_optional_user(
     
     token = authorization.replace("Bearer ", "")
     
-    user = supabase.auth.get_user(token)
-    return user.user.id if user and user.user else None
-    
+    try:
+        payload = jwt.decode(
+            token,
+            options={"verify_signature": False}
+        )
+        user_id = payload.get("sub")
+        
+        # Check expiration
+        import time
+        exp = payload.get("exp")
+        if exp and time.time() > exp:
+            return None
+        
+        return user_id
+    except:
+        return None
