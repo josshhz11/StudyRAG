@@ -46,14 +46,33 @@ export default function ChatPage() {
         { role: "assistant", content: response.answer },
       ]);
     } catch (err: any) {
-      // Add error message
+      // Handle error properly - extract error message string
+      let errorMessage = "Sorry, I encountered an error. Please try again.";
+      
+      if (err.response?.data?.detail) {
+        // If detail is a string, use it directly
+        if (typeof err.response.data.detail === "string") {
+          errorMessage = err.response.data.detail;
+        } 
+        // If detail is an array (validation errors), format it
+        else if (Array.isArray(err.response.data.detail)) {
+          errorMessage = "Validation error: " + 
+            err.response.data.detail.map((e: any) => e.msg || JSON.stringify(e)).join(", ");
+        }
+        // If detail is an object, stringify it
+        else {
+          errorMessage = JSON.stringify(err.response.data.detail);
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      // Add error message as string
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content:
-            err.response?.data?.detail ||
-            "Sorry, I encountered an error. Please try again.",
+          content: errorMessage,
         },
       ]);
     } finally {

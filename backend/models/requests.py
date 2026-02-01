@@ -15,10 +15,10 @@ class LoginRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     """Chat query request"""
-    query: str = Field(..., min_length=1)
-    active_semester: Optional[str] = None
-    active_subject: Optional[str] = None
-    active_books: list[str] = []
+    question: str = Field(..., min_length=1)  # Changed from 'query' to match frontend
+    semester: Optional[str] = None
+    subject: Optional[str] = None
+    books: Optional[list[str]] = []
 
 class UploadMetadata(BaseModel):
     """File upload metadata"""

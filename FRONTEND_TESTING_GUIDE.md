@@ -386,7 +386,7 @@
 
 ### Phase 6: Chat Interface (Placeholder Testing)
 
-> **Note**: Chat won't return real answers until vector DB is set up, but we can test the UI and API connection.
+> **Note**: Chat is currently returning a placeholder message explaining that the vector DB is being set up. This is expected behavior until ChromaDB is deployed and PDFs are ingested. See `RAG_IMPLEMENTATION_PLAN.md` for implementation details.
 
 #### Test 6.1: Send Chat Message Without Filters
 **Actions:**
@@ -398,7 +398,10 @@
 - [ ] Message appears in chat as user message (blue bubble, right side)
 - [ ] Loading indicator appears (spinning icon)
 - [ ] Bot response appears on left side (gray bubble)
-- [ ] Response might be error or placeholder since vector DB not ready
+- [ ] Response is a **placeholder message** explaining system status:
+  - ✅ Confirms your PDFs are stored in S3
+  - ✅ Explains vector DB setup is in progress
+  - ✅ Lists next steps to get RAG working
 - [ ] Input box clears after sending
 
 **Browser DevTools:**
@@ -409,6 +412,7 @@
     "question": "What is natural language processing?"
   }
   ```
+- [ ] Response includes placeholder answer and metadata
 
 ---
 
