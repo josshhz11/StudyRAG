@@ -1,7 +1,4 @@
-# storage_adapter.py - NEW FILE
-"""
-Storage adapter for StudyRAG - supports both local filesystem and AWS S3
-"""
+# Storage adapter for StudyRAG - supports both local filesystem (testing) and AWS S3 (production)
 import os
 import boto3
 import io
